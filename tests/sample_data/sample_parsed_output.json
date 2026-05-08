@@ -1,0 +1,32 @@
+{
+  "role_title": "Lead AI Engineer",
+  "required_skills": [
+    "Python",
+    "LangChain",
+    "LLMs"
+  ],
+  "preferred_skills": [
+    "Docker",
+    "AWS",
+    "Streamlit"
+  ],
+  "minimum_experience": 6,
+  "education_requirements": [
+    "BS or MS in Computer Science"
+  ],
+  "responsibilities": [
+    "Build LangChain and LangGraph AI agents",
+    "Deploy FastAPI applications in Docker containers",
+    "Work closely with HR to streamline resume evaluation workflows"
+  ],
+  "tools_and_technologies": [
+    "Python",
+    "LangChain",
+    "LangGraph",
+    "FastAPI",
+    "Docker",
+    "AWS",
+    "Streamlit"
+  ],
+  "seniority_level": "Lead"
+}

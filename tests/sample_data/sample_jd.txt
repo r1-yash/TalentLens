@@ -1,0 +1,12 @@
+Role Title: Lead AI Engineer
+Experience Required: 6+ years
+Location: Remote
+
+Responsibilities:
+- Build LangChain and LangGraph AI agents.
+- Deploy FastAPI applications in Docker containers.
+- Work closely with HR to streamline resume evaluation workflows.
+
+Required Skills: Python, LangChain, LLMs
+Preferred Skills: Docker, AWS, Streamlit
+Education: BS or MS in Computer Science
