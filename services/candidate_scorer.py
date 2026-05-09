@@ -101,56 +101,99 @@ class CandidateScorer:
             
         return {"score": score, "justification": justification.strip()}
 
-    def score_experience_relevance(self, experience_similarity: float, resume_full_text: str = "", jd_experience: str = "") -> Dict[str, Any]:
-        """Weight: 25%. Semantic + Heuristic floor + Overqualification check."""
-        if experience_similarity < 0.20:
-            base_score = 2
-        elif experience_similarity < 0.35:
-            base_score = 4
-        elif experience_similarity < 0.50:
-            base_score = 6
-        elif experience_similarity < 0.65:
-            base_score = 8
-        else:
-            base_score = 10
-
-        score = base_score
+    def score_experience_relevance(self, experience_similarity: float, resume_full_text: str = "", jd_data: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Weight: 25%. Experience hierarchy (FT vs Intern) + Domain Match Matrix."""
+        if jd_data is None:
+            jd_data = {}
+            
         text_lower = resume_full_text.lower()
-        jd_lower = jd_experience.lower()
         
-        has_intern = "intern" in text_lower
-        has_production = any(kw in text_lower for kw in ["deployed", "production", "api", "pipeline", "llm"])
-        has_fulltime = any(kw in text_lower for kw in ["full-time", "fulltime", "engineer", "senior"])
-        has_leadership = any(kw in text_lower for kw in ["led", "architected", "scaled"])
-        has_any_exp = any(kw in text_lower for kw in ["experience", "worked", "intern", "engineer", "developer", "freelance"])
+        # Extract JD terms
+        jd_title = jd_data.get("role_title", "").lower()
+        jd_skills = jd_data.get("required_skills", [])
+        jd_terms = set(jd_skills + jd_title.split())
+        jd_terms = {t.lower() for t in jd_terms if len(t) > 2}
         
-        if has_fulltime:
-            score = max(score, 7)
-        elif has_intern and has_production:
-            score = max(score, 6)
-        elif not has_any_exp:
-            score = min(score, 3)
-            
-        if has_leadership:
-            score += 1
-            
-        score = min(10, score)
+        # 1. Detect Domain Match
+        matched_terms = sum(1 for term in jd_terms if term in text_lower)
+        domain_match_pct = (matched_terms / len(jd_terms)) if len(jd_terms) > 0 else 1.0
         
-        # Overqualification check
-        jd_is_junior = any(kw in jd_lower for kw in ["fresher", "0-2 years", "entry level", "junior", "intern"])
-        resume_is_senior = any(kw in text_lower for kw in ["senior", "lead", "6+ years", "7+ years", "manager", "director"])
-        
-        if jd_is_junior and resume_is_senior:
-            score = min(score, 5)
-            justification = "Candidate appears overqualified for this entry-level position."
+        if domain_match_pct >= 0.60:
+            domain_level = "Exact"
+        elif domain_match_pct >= 0.30:
+            domain_level = "Adjacent"
         else:
-            if score >= 8:
-                justification = "Highly relevant experience in the target domain."
-            elif score >= 5:
-                justification = "Relevant experience present, but may lack scale or perfect alignment."
-            else:
-                justification = "Inexperienced or completely unrelated career history."
+            domain_level = "Unrelated"
             
+        # 2. Detect Experience Type & Duration
+        intern_signals = any(kw in text_lower for kw in ["intern", "internship", "trainee", "apprentice"])
+        fulltime_signals = any(kw in text_lower for kw in ["full-time", "fulltime", "senior", "lead", "manager", "engineer at", "developer at"])
+        
+        # Extract year spans using regex
+        year_matches = re.findall(r'(20\d{2})\s*[-–]\s*(20\d{2}|present|current)', text_lower)
+        max_duration = 0
+        for start, end in year_matches:
+            try:
+                start_yr = int(start)
+                end_yr = 2024 if end in ['present', 'current'] else int(end)
+                duration = end_yr - start_yr
+                if duration > max_duration:
+                    max_duration = duration
+            except ValueError:
+                continue
+                
+        # Classify Experience Type
+        exp_type = "No experience"
+        if fulltime_signals or max_duration >= 1:
+            if max_duration >= 3 or any(kw in text_lower for kw in ["senior", "lead", "manager", "5+ years", "4+ years"]):
+                exp_type = "Full-time 3+ years"
+            else:
+                exp_type = "Full-time 1-2 years"
+        elif intern_signals:
+            exp_type = "Internship"
+        elif any(kw in text_lower for kw in ["experience", "worked at"]):
+            # Fallback if vague
+            exp_type = "Internship"
+            
+        # 3. Final Score Matrix & Semantic Adjustment
+        # Semantic gives a slight bump within the band
+        bump = 1 if experience_similarity >= 0.55 else 0
+        
+        if exp_type == "Full-time 3+ years":
+            if domain_level == "Exact":
+                score = 9 + bump
+            elif domain_level == "Adjacent":
+                score = 7 + bump
+            else:
+                score = 4 + bump
+        elif exp_type == "Full-time 1-2 years":
+            if domain_level == "Exact":
+                score = 7 + bump
+            elif domain_level == "Adjacent":
+                score = 6 + bump
+            else:
+                score = 3 + bump
+        elif exp_type == "Internship":
+            if domain_level == "Exact":
+                score = 6 + bump
+            elif domain_level == "Adjacent":
+                score = 4 + bump
+            else:
+                score = 2 + bump
+        else: # No experience
+            if domain_level == "Exact" or domain_level == "Adjacent":
+                score = 1 + bump
+            else:
+                score = 1
+
+        score = min(10, max(1, score))
+        
+        # 4. Generate Justification
+        if exp_type == "No experience":
+            justification = "No professional work experience detected. Pure academic profile."
+        else:
+            justification = f"{exp_type} experience with {domain_level.lower()} domain alignment to JD requirements."
+
         return {"score": score, "justification": justification}
 
     def score_education_certs(self, resume_text: str, jd_education: list) -> Dict[str, Any]:
@@ -357,7 +400,7 @@ class CandidateScorer:
         jd_experience = str(jd_data.get("minimum_experience", "")) + " " + " ".join(jd_data.get("responsibilities", []))
         
         skills = self.score_skills_match(semantic_results.get("skills_similarity", 0.0), resume_full_text, jd_required_skills)
-        experience = self.score_experience_relevance(semantic_results.get("experience_similarity", 0.0), resume_full_text, jd_experience)
+        experience = self.score_experience_relevance(semantic_results.get("experience_similarity", 0.0), resume_full_text, jd_data)
         education = self.score_education_certs(resume_full_text, jd_data.get("education_requirements", []))
         portfolio = self.score_project_portfolio(resume_full_text, jd_data)
         communication = self.score_communication_quality(resume_full_text)
