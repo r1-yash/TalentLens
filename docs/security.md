@@ -1,4 +1,4 @@
-# Security Mitigations
+ # Security Mitigations
 
 As per the mandatory requirements, this project implements the following security measures:
 

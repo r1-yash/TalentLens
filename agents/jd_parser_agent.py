@@ -22,6 +22,7 @@ class JDParsingAgent:
         
         # Enforce structured Pydantic output natively via LangChain's with_structured_output, its like my deductra project
         self.structured_llm = self.llm.with_structured_output(JobDescriptionData)
+        # Whatever Gemini returns must fit the JobDescriptionData schema.
         
         # Design a robust prompt template
         self.prompt = PromptTemplate(
