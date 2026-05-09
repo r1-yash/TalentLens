@@ -1,11 +1,16 @@
 import streamlit as st
 import os
+import pandas as pd
+from datetime import datetime
 from dotenv import load_dotenv
 
 # Ensure environment is loaded BEFORE anything else
 load_dotenv(override=True)
 
 from pipeline.shortlisting_pipeline import ShortlistingPipeline
+from services.candidate_scorer import CandidateScorer
+from services.candidate_ranker import CandidateRanker
+from services.override_logger import log_override
 
 # --- UI CONFIGURATION & STYLING ---
 st.set_page_config(
@@ -106,6 +111,11 @@ def get_pipeline():
     return ShortlistingPipeline()
 
 def main():
+    if "pipeline_results" not in st.session_state:
+        st.session_state.pipeline_results = None
+    if "session_overrides" not in st.session_state:
+        st.session_state.session_overrides = []
+
     # --- SIDEBAR CONFIGURATION ---
     with st.sidebar:
         st.markdown("<h2 style='text-align: center; margin-bottom: 0;'>⚙️ Configure Run</h2>", unsafe_allow_html=True)
@@ -152,7 +162,6 @@ def main():
         pipeline = get_pipeline()
 
         with st.status("🧠 Initializing Intelligence Pipeline...", expanded=True) as status:
-            # Step 1: JD Extraction
             st.write("Targeting key requirements from Job Description...")
             try:
                 jd_data = pipeline.process_job_description(jd_raw_text)
@@ -162,19 +171,23 @@ def main():
                 st.error(f"Failed to parse JD: {e}")
                 return
 
-            # Step 2: Semantic Matching & Scoring
             st.write(f"Processing {len(resume_files)} candidate vectors...")
             resumes_input = [(f.name, f) for f in resume_files]
             
             try:
                 final_results = pipeline.process_candidates(jd_data, jd_raw_text, resumes_input)
+                # Store in session state to enable overrides without rerunning pipeline
+                st.session_state.pipeline_results = final_results
+                st.session_state.session_overrides = [] # Reset log on new run
                 status.update(label="Analysis Complete!", state="complete", expanded=False)
             except Exception as e:
                 status.update(label="Pipeline Failed", state="error", expanded=True)
                 st.error(f"Error during candidate processing: {e}")
                 return
-        
-        # --- DISPLAY RESULTS ---
+
+    # Render results from session state (allows interactive updates without reloading)
+    if st.session_state.pipeline_results:
+        final_results = st.session_state.pipeline_results
         summary = final_results.get("summary", {})
         
         st.markdown("### 📊 Executive Summary")
@@ -190,45 +203,149 @@ def main():
         ranked_list = final_results.get("ranked_candidates", [])
         if not ranked_list:
             st.warning("No candidates were successfully ranked.")
-            return
-
-        for candidate in ranked_list:
-            score = candidate["weighted_total"]
-            name = candidate["candidate_name"]
-            rank = candidate["rank"]
-            rec = candidate["recommendation"]
-            tier = candidate["categorization"]
-            
-            # Badge generation
-            badge_class = "badge-nohire"
-            if rec == "Hire":
-                badge_class = "badge-hire"
-            elif rec == "Consider":
-                badge_class = "badge-consider"
-                
-            badge_html = f"<span class='badge {badge_class}'>{rec}</span>"
-            tier_html = f"<span class='badge badge-tier'>{tier}</span>"
-
-            with st.expander(f"#{rank} — {name}  (Score: {score}/10)"):
-                st.markdown(f"{badge_html} {tier_html}", unsafe_allow_html=True)
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                # Rubric sub-scores
-                st.markdown("##### Dimension Breakdown")
+        else:
+            for idx, candidate in enumerate(ranked_list):
+                score = candidate["weighted_total"]
+                name = candidate["candidate_name"]
+                rank = candidate["rank"]
+                rec = candidate["recommendation"]
+                tier = candidate["categorization"]
                 rubric = candidate["rubric_scores"]
                 
-                c1, c2, c3, c4, c5 = st.columns(5)
-                c1.metric("Skills (30%)", f"{rubric['skills_match']}/10")
-                c2.metric("Experience (25%)", f"{rubric['experience_relevance']}/10")
-                c3.metric("Education (15%)", f"{rubric['education_certs']}/10")
-                c4.metric("Portfolio (20%)", f"{rubric['project_portfolio']}/10")
-                c5.metric("Communication (10%)", f"{rubric['communication_quality']}/10")
-                
-    else:
+                # Badge generation
+                badge_class = "badge-nohire"
+                if rec == "Hire":
+                    badge_class = "badge-hire"
+                elif rec == "Consider":
+                    badge_class = "badge-consider"
+                    
+                badge_html = f"<span class='badge {badge_class}'>{rec}</span>"
+                tier_html = f"<span class='badge badge-tier'>{tier}</span>"
+
+                with st.expander(f"#{rank} — {name}  (Score: {score}/10)"):
+                    st.markdown(f"{badge_html} {tier_html}", unsafe_allow_html=True)
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    
+                    st.markdown("##### Dimension Breakdown")
+                    
+                    c1, c2, c3, c4, c5 = st.columns(5)
+                    cols = [c1, c2, c3, c4, c5]
+                    dims = [
+                        ("Skills (30%)", "skills_match"),
+                        ("Experience (25%)", "experience_relevance"),
+                        ("Education (15%)", "education_certs"),
+                        ("Portfolio (20%)", "project_portfolio"),
+                        ("Communication (10%)", "communication_quality")
+                    ]
+                    
+                    for i, (label, key) in enumerate(dims):
+                        dim_data = rubric[key]
+                        score_val = dim_data.get('score', 0)
+                        is_overriden = "original_score" in dim_data
+                        
+                        with cols[i]:
+                            if is_overriden:
+                                st.metric(f"{label} ⚠️", f"{score_val}/10")
+                                st.markdown(f"<div style='font-size: 0.75rem; color: #718096;'>Original: {dim_data['original_score']}/10</div>", unsafe_allow_html=True)
+                            else:
+                                st.metric(label, f"{score_val}/10")
+                            st.markdown(f"<div style='font-size: 0.8rem; color: #A0AEC0; font-style: italic;'>{dim_data.get('justification', '')}</div>", unsafe_allow_html=True)
+                    
+                    # HR Override Section
+                    st.markdown("<hr style='margin: 1.5rem 0; border-top: 1px dashed rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
+                    with st.expander("⚙️ HR Override"):
+                        dim_options = {
+                            "Skills": "skills_match",
+                            "Experience": "experience_relevance",
+                            "Education": "education_certs",
+                            "Portfolio": "project_portfolio",
+                            "Communication": "communication_quality"
+                        }
+                        
+                        o_col1, o_col2 = st.columns([1, 1.5])
+                        with o_col1:
+                            selected_dim_label = st.selectbox("Select Dimension to Override", options=list(dim_options.keys()), key=f"dim_{name}_{idx}")
+                            new_score = st.number_input("New Score (0-10)", min_value=0, max_value=10, value=5, key=f"score_{name}_{idx}")
+                        with o_col2:
+                            reason = st.text_input("Reason for Override (Required)", key=f"reason_{name}_{idx}")
+                            st.markdown("<br>", unsafe_allow_html=True)
+                            if st.button("Apply Override", key=f"btn_{name}_{idx}"):
+                                if not reason.strip():
+                                    st.error("Reason is required.")
+                                else:
+                                    dim_key = dim_options[selected_dim_label]
+                                    old_score = candidate["rubric_scores"][dim_key].get("score", 0)
+                                    
+                                    # Save original score if this is the first override
+                                    if "original_score" not in candidate["rubric_scores"][dim_key]:
+                                        candidate["rubric_scores"][dim_key]["original_score"] = old_score
+                                        
+                                    candidate["rubric_scores"][dim_key]["score"] = new_score
+                                    
+                                    # Recalculate Totals
+                                    scorer = CandidateScorer()
+                                    dim_scores = {k: v.get("score", 0) for k, v in candidate["rubric_scores"].items()}
+                                    new_total = scorer.calculate_weighted_total(dim_scores)
+                                    new_rec = scorer.generate_recommendation(new_total)
+                                    
+                                    old_total = candidate["weighted_total"]
+                                    old_rec = candidate["recommendation"]
+                                    
+                                    candidate["weighted_total"] = new_total
+                                    candidate["recommendation"] = new_rec
+                                    
+                                    ranker = CandidateRanker()
+                                    candidate["categorization"] = ranker._categorize_candidate(new_total)
+                                    
+                                    # Log to file
+                                    log_override(name, selected_dim_label, old_score, new_score, reason, old_rec, new_rec)
+                                    
+                                    # Add to session log
+                                    st.session_state.session_overrides.append({
+                                        "Candidate": name,
+                                        "Dimension": selected_dim_label,
+                                        "Original Score": old_score,
+                                        "New Score": new_score,
+                                        "Reason": reason,
+                                        "Timestamp": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+                                    })
+                                    
+                                    # Re-sort ranked_list based on new totals
+                                    sorted_list = sorted(
+                                        st.session_state.pipeline_results["ranked_candidates"],
+                                        key=lambda x: x["weighted_total"],
+                                        reverse=True
+                                    )
+                                    
+                                    # Update ranks
+                                    for i_rank, c in enumerate(sorted_list):
+                                        c["rank"] = i_rank + 1
+                                        
+                                    st.session_state.pipeline_results["ranked_candidates"] = sorted_list
+                                    
+                                    # Update Summary
+                                    new_summary = {
+                                        "total_candidates": len(sorted_list),
+                                        "Top Tier": 0, "Consider": 0, "Weak Match": 0
+                                    }
+                                    for c in sorted_list:
+                                        new_summary[c["categorization"]] += 1
+                                    st.session_state.pipeline_results["summary"] = new_summary
+                                    
+                                    # Trigger UI refresh
+                                    st.rerun()
+
+        # Render Override Log Table if any overrides occurred in this session
+        if st.session_state.session_overrides:
+            st.markdown("<hr>", unsafe_allow_html=True)
+            st.markdown("### 📝 Override Log (Current Session)")
+            df = pd.DataFrame(st.session_state.session_overrides)
+            st.dataframe(df, use_container_width=True)
+
+    elif not start_btn:
         # Default empty state
         st.info("👈 Please configure the pipeline in the sidebar and click **Run Intelligence Pipeline**.")
         
-        # Adding a nice placeholder graphic or text
         st.markdown("""
         <div style="margin-top: 50px; text-align: center; padding: 40px; background: rgba(255,255,255,0.02); border-radius: 12px; border: 1px dashed rgba(255,255,255,0.1);">
             <h3 style="color: #A0AEC0;">Waiting for data...</h3>

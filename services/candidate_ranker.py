@@ -65,11 +65,11 @@ class CandidateRanker:
                 "recommendation": candidate.get("recommendation", "No Hire"),
                 "categorization": category,
                 "rubric_scores": {
-                    "skills_match": candidate.get("skills_match", {}).get("score", 0),
-                    "experience_relevance": candidate.get("experience_relevance", {}).get("score", 0),
-                    "education_certs": candidate.get("education_certs", {}).get("score", 0),
-                    "project_portfolio": candidate.get("project_portfolio", {}).get("score", 0),
-                    "communication_quality": candidate.get("communication_quality", {}).get("score", 0)
+                    "skills_match": candidate.get("skills_match", {}),
+                    "experience_relevance": candidate.get("experience_relevance", {}),
+                    "education_certs": candidate.get("education_certs", {}),
+                    "project_portfolio": candidate.get("project_portfolio", {}),
+                    "communication_quality": candidate.get("communication_quality", {})
                 }
             })
 
